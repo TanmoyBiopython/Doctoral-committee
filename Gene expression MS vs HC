@@ -1,0 +1,149 @@
+# ============================================================
+# Publication-ready visualization: MS vs HC gene expression
+# Renders in RStudio Plots pane AND saves PDF + PNG (300 dpi)
+# ============================================================
+
+# ---- 0. Packages -------------------------------------------
+# install.packages(c("tidyverse","ggplot2","patchwork"))
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+
+# ---- 1. Data -----------------------------------------------
+# NOTE: supplied log2(Fold Change) values are sign-flipped vs.
+# Fold Change (e.g., BAFFR FC=0.35 -> log2FC should be -1.51,
+# but is given as +1.51; TLR2 FC=4.50 -> log2FC should be +2.17,
+# but is given as -2.17). Fold Change and Status agree with each
+# other, so log2FC is computed as log2(FoldChange).
+df <- tibble(
+  Gene       = c("BAFF","BAFFR","TLR2","TLR3","TLR4",
+                 "TLR6","TLR9","RIG-1","MDA","MyD88"),
+  FoldChange = c(1.09, 0.35, 4.50, 0.70, 3.17,
+                 2.68, 1.95, 1.39, 1.18, 2.01),
+  log2FC_rep = c(-0.13, 1.51, -2.17, 0.51, -1.66,
+                 -1.42, -0.96, -0.48, -0.24, -1.01),
+  p_value    = c(0.711, 0.028, 0.000, 0.419, 0.054,
+                 0.019, 0.083, 0.384, 0.658, 0.008),
+  Status     = c(
+    "No change",
+    "DOWN (significant)",
+    "UP (significant)",
+    "No change",
+    "UP (trend, not significant)",
+    "UP (significant)",
+    "UP (trend, not significant)",
+    "No change",
+    "No change",
+    "UP (significant)"
+  )
+)
+
+# ---- 2. Process --------------------------------------------
+df <- df %>%
+  mutate(
+    log2FC        = log2(FoldChange),                  # consistent direction
+    p_value_plot  = ifelse(p_value == 0, 1e-4, p_value),
+    negLog10P     = -log10(p_value_plot),
+    Significant   = p_value < 0.05,
+    Category      = case_when(
+      Significant & log2FC > 0 ~ "Up (significant)",
+      Significant & log2FC < 0 ~ "Down (significant)",
+      TRUE                     ~ "Not significant"
+    ),
+    p_label = ifelse(p_value == 0, "p < 0.001",
+                     sprintf("p = %.3f", p_value))
+  )
+
+# Order genes by log2FC (largest up at top of the plot)
+df$Gene <- factor(df$Gene, levels = df %>% arrange(log2FC) %>% pull(Gene))
+
+# Positions for asterisks / p labels on significant genes
+df_sig <- df %>%
+  filter(Significant) %>%
+  mutate(
+    x_ast = log2FC + ifelse(log2FC >= 0, 0.12, -0.12),
+    x_p   = negLog10P + 0.10
+  )
+
+# ---- 3. Palette (colorblind-friendly, Okabe-Ito inspired) --
+pal_cat <- c(
+  "Up (significant)"   = "#D55E00",  # coral / vermillion
+  "Down (significant)" = "#0072B2",  # blue
+  "Not significant"    = "#B0B0B0"   # muted gray
+)
+
+# ---- 4. Panel A: log2FC lollipop ---------------------------
+p_lollipop <- ggplot(df, aes(x = log2FC, y = Gene)) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey60", linewidth = 0.4) +
+  geom_segment(aes(x = 0, xend = log2FC, yend = Gene,
+                   color = Category),
+               linewidth = 1.1, lineend = "round") +
+  geom_point(aes(color = Category), size = 3.6) +
+  geom_text(data = df_sig,
+            aes(x = x_ast, y = Gene, label = "*"),
+            size = 6.5, fontface = "bold", color = "black",
+            vjust = 0.75, show.legend = FALSE) +
+  scale_color_manual(values = pal_cat, name = NULL) +
+  scale_y_discrete(expand = expansion(add = 0.5)) +
+  scale_x_continuous(expand = expansion(mult = c(0.12, 0.15))) +
+  labs(x = expression(log[2]~"Fold Change (MS vs HC)"), y = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(face = "bold", color = "black", size = 11),
+    axis.text.x  = element_text(color = "black"),
+    axis.title.x = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.text     = element_text(size = 10),
+    plot.margin     = margin(5, 10, 5, 5)
+  ) +
+  coord_cartesian(clip = "off")
+
+# ---- 5. Panel B: -log10(p) bars ----------------------------
+p_pvalue <- ggplot(df, aes(x = negLog10P, y = Gene)) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+             color = "#D55E00", linewidth = 0.5) +
+  annotate("text", x = -log10(0.05), y = 0.6,
+           label = "p = 0.05", hjust = -0.05,
+           size = 3, color = "#D55E00") +
+  geom_col(aes(fill = Category), width = 0.65,
+           color = "black", linewidth = 0.2) +
+  geom_text(data = df_sig,
+            aes(x = x_p, y = Gene, label = p_label),
+            hjust = 0, size = 3.3, color = "black",
+            show.legend = FALSE) +
+  scale_fill_manual(values = pal_cat, name = NULL) +
+  scale_y_discrete(expand = expansion(add = 0.5)) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.30))) +
+  labs(x = expression(-log[10]~"(p-value)"), y = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank(),
+    axis.text.x  = element_text(color = "black"),
+    axis.title.x = element_text(face = "bold"),
+    legend.position = "none",
+    plot.margin     = margin(5, 10, 5, 5)
+  ) +
+  coord_cartesian(clip = "off")
+
+# ---- 6. Combine --------------------------------------------
+final_plot <- p_lollipop + p_pvalue +
+  plot_layout(widths = c(1.2, 1), guides = "collect") +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag       = element_text(face = "bold", size = 14),
+        legend.position = "bottom")
+
+# ---- 7. Show in RStudio Plots pane -------------------------
+try(x11(width = 10, height = 6), silent = TRUE)   # use quartz() on macOS
+print(final_plot)
+
+# ---- 8. Save PDF + PNG (300 dpi) ---------------------------
+ggsave("MS_vs_HC_gene_expression.pdf",
+       plot = final_plot, width = 10, height = 6,
+       units = "in", device = cairo_pdf)
+
+ggsave("MS_vs_HC_gene_expression.png",
+       plot = final_plot, width = 10, height = 6,
+       units = "in", dpi = 300, bg = "white")
