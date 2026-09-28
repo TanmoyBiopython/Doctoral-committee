@@ -1,0 +1,142 @@
+# ============================================================
+# Publication-ready visualization: SLE vs HC gene expression
+# FIXED: no scale_y_continuous() on a discrete (gene) axis
+# ============================================================
+
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+
+# ---- 1. Data -----------------------------------------------
+df <- tibble(
+  Gene       = c("BAFF","BAFFR","TLR2","TLR3","TLR4",
+                 "TLR6","TLR9","RIG-1","MDA","MyD88"),
+  FoldChange = c(2.00, 0.38, 3.26, 1.27, 1.87,
+                 2.05, 1.47, 2.37, 2.24, 1.76),
+  log2FC     = c(1.00, -1.38, 1.70, 0.35, 0.90,
+                 1.03, 0.56, 1.24, 1.17, 0.82),
+  p_value    = c(0.006, 0.033, 0.000, 0.636, 0.231,
+                 0.086, 0.323, 0.018, 0.027, 0.011),
+  Status     = c(
+    "UP (significant)",
+    "DOWN (significant)",
+    "UP (significant)",
+    "No change",
+    "UP (trend, not significant)",
+    "UP (trend, not significant)",
+    "No change",
+    "UP (significant)",
+    "UP (significant)",
+    "UP (significant)"
+  )
+)
+
+# ---- 2. Process --------------------------------------------
+df <- df %>%
+  mutate(
+    p_value_plot = ifelse(p_value == 0, 1e-4, p_value),
+    negLog10P    = -log10(p_value_plot),
+    Significant  = p_value < 0.05,
+    Category     = case_when(
+      Significant & log2FC > 0 ~ "Up (significant)",
+      Significant & log2FC < 0 ~ "Down (significant)",
+      TRUE                     ~ "Not significant"
+    ),
+    p_label = ifelse(p_value == 0, "p < 0.001",
+                     sprintf("p = %.3f", p_value))
+  )
+
+# Order genes by log2FC (largest up at top of the plot)
+df$Gene <- factor(df$Gene, levels = df %>% arrange(log2FC) %>% pull(Gene))
+
+df_sig <- df %>%
+  filter(Significant) %>%
+  mutate(
+    x_ast = log2FC + ifelse(log2FC >= 0, 0.10, -0.10),
+    x_p   = negLog10P + 0.10
+  )
+
+# ---- 3. Palette --------------------------------------------
+pal_cat <- c(
+  "Up (significant)"   = "#D55E00",
+  "Down (significant)" = "#0072B2",
+  "Not significant"    = "#B0B0B0"
+)
+
+# ---- 4. Panel A: log2FC lollipop ---------------------------
+p_lollipop <- ggplot(df, aes(x = log2FC, y = Gene)) +
+  geom_vline(xintercept = 0, linetype = "dashed",
+             color = "grey60", linewidth = 0.4) +
+  geom_segment(aes(x = 0, xend = log2FC, yend = Gene,
+                   color = Category),
+               linewidth = 1.1, lineend = "round") +
+  geom_point(aes(color = Category), size = 3.6) +
+  geom_text(data = df_sig,
+            aes(x = x_ast, y = Gene, label = "*"),
+            size = 6.5, fontface = "bold", color = "black",
+            vjust = 0.75, show.legend = FALSE) +
+  scale_color_manual(values = pal_cat, name = NULL) +
+  # Discrete y-axis ONLY — no scale_y_continuous() here
+  scale_y_discrete(expand = expansion(add = 0.5)) +
+  scale_x_continuous(expand = expansion(mult = c(0.10, 0.15))) +
+  labs(x = expression(log[2]~"Fold Change (SLE vs HC)"), y = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.y  = element_text(face = "bold", color = "black", size = 11),
+    axis.text.x  = element_text(color = "black"),
+    axis.title.x = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.text     = element_text(size = 10),
+    plot.margin     = margin(5, 10, 5, 5)
+  ) +
+  coord_cartesian(clip = "off")
+
+# ---- 5. Panel B: -log10(p) bars ----------------------------
+p_pvalue <- ggplot(df, aes(x = negLog10P, y = Gene)) +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed",
+             color = "#D55E00", linewidth = 0.5) +
+  annotate("text", x = -log10(0.05), y = 0.6,
+           label = "p = 0.05", hjust = -0.05,
+           size = 3, color = "#D55E00") +
+  geom_col(aes(fill = Category), width = 0.65,
+           color = "black", linewidth = 0.2) +
+  geom_text(data = df_sig,
+            aes(x = x_p, y = Gene, label = p_label),
+            hjust = 0, size = 3.3, color = "black",
+            show.legend = FALSE) +
+  scale_fill_manual(values = pal_cat, name = NULL) +
+  # Discrete y-axis ONLY — no scale_y_continuous() here
+  scale_y_discrete(expand = expansion(add = 0.5)) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.30))) +
+  labs(x = expression(-log[10]~"(p-value)"), y = NULL) +
+  theme_classic(base_size = 12) +
+  theme(
+    axis.text.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y  = element_blank(),
+    axis.text.x  = element_text(color = "black"),
+    axis.title.x = element_text(face = "bold"),
+    legend.position = "none",
+    plot.margin     = margin(5, 10, 5, 5)
+  ) +
+  coord_cartesian(clip = "off")
+
+# ---- 6. Combine --------------------------------------------
+final_plot <- p_lollipop + p_pvalue +
+  plot_layout(widths = c(1.2, 1), guides = "collect") +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(face = "bold", size = 14),
+        legend.position = "bottom")
+
+# ---- 7. Show in RStudio Plots pane -------------------------
+try(x11(width = 10, height = 6), silent = TRUE)   # use quartz() on macOS
+print(final_plot)
+
+# ---- 8. Save PDF + PNG (300 dpi) ---------------------------
+ggsave("SLE_vs_HC_gene_expression.pdf",
+       plot = final_plot, width = 10, height = 6,
+       units = "in", device = cairo_pdf)
+
+ggsave("SLE_vs_HC_gene_expression.png",
+       plot = final_plot, width = 10, height = 6,
+       units = "in", dpi = 300, bg = "white")
